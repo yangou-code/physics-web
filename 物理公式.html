@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物理法则可视化 - 纯净版</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: white;
+            font-family: 'Times New Roman', serif;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1; /* 画布在最底层 */
+        }
+
+        /* UI 容器 */
+        #ui-layer {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            pointer-events: none; /* 穿透点击 */
+            user-select: none;
+            z-index: 9999; /* 确保层级极高 */
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* 公式主体 - 去除背景，增强阴影 */
+        #formula {
+            font-size: 5rem;
+            font-weight: bold;
+            margin: 0;
+            font-family: 'Cambria Math', 'Times New Roman', serif;
+            color: #fff;
+            /* 极强的黑色多重阴影，确保在亮背景下可读 */
+            text-shadow: 
+                0 0 5px #000,
+                0 0 10px #000,
+                0 0 20px #000,
+                0 0 40px #000;
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            /* 移除毛玻璃相关属性 */
+            background: transparent;
+            padding: 10px 0;
+        }
+
+        /* 说明文字 - 去除背景，增强阴影 */
+        #description {
+            font-size: 1.5rem;
+            color: #eee;
+            font-family: "Helvetica Neue", sans-serif;
+            font-weight: 300;
+            letter-spacing: 1px;
+            
+            /* 强阴影替代背景板 */
+            text-shadow: 
+                0 0 5px #000,
+                0 0 10px #000,
+                0 0 15px #000;
+            
+            /* 移除毛玻璃相关属性 */
+            background: transparent;
+            border: none;
+            box-shadow: none;
+            padding: 5px 0;
+        }
+
+        #hint {
+            position: absolute;
+            bottom: 40px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.6);
+            font-family: sans-serif;
+            font-size: 0.8rem;
+            pointer-events: none;
+            z-index: 9999;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            text-shadow: 0 2px 5px #000;
+        }
+
+        /* 顶部进度条 */
+        #progress-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+            z-index: 10000;
+            background: rgba(255,255,255,0.1);
+        }
+        #progress {
+            height: 100%;
+            background: #fff;
+            width: 0%;
+            transition: width 0.5s ease, background-color 0.5s ease;
+            box-shadow: 0 0 10px rgba(255,255,255,0.7);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="progress-container"><div id="progress"></div></div>
+    
+    <div id="ui-layer">
+        <div id="formula"></div>
+        <div id="description"></div>
+    </div>
+    
+    <div id="hint">点击屏幕 · 切换物理场</div>
+    
+    <canvas id="canvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const formulaEl = document.getElementById('formula');
+    const descEl = document.getElementById('description');
+    const progressEl = document.getElementById('progress');
+
+    let width, height, cx, cy;
+    let particles = [];
+    let currentModeIndex = 0;
+    
+    // 物理参数
+    const G_CONST = 1500; 
+
+    const modes = [
+        {
+            formula: "F = q(v × B)",
+            desc: "洛伦兹力：电荷在磁场中的螺旋轨迹",
+            trail: 'long', 
+            init: () => initParticles(900, 'lorentz'),
+            update: (p) => {
+                const angleSpeed = 0.04 * p.charge; 
+                const oldVx = p.vx;
+                const oldVy = p.vy;
+                p.vx = oldVx * Math.cos(angleSpeed) - oldVy * Math.sin(angleSpeed);
+                p.vy = oldVx * Math.sin(angleSpeed) + oldVy * Math.cos(angleSpeed);
+                p.x += p.vx; p.y += p.vy;
+                if (p.x < 0) p.x = width;
+                if (p.x > width) p.x = 0;
+                if (p.y < 0) p.y = height;
+                if (p.y > height) p.y = 0;
+                p.color = p.charge > 0 ? 'rgba(255, 40, 80, 0.7)' : 'rgba(0, 220, 255, 0.7)';
+            }
+        },
+        {
+            formula: "iℏ ∂ψ/∂t = Ĥψ",
+            desc: "薛定谔方程：波函数的干涉与不确定性",
+            trail: 'ghost', 
+            init: () => initParticles(1600, 'quantum'),
+            update: (p) => {
+                p.x += 1.5;
+                const k1 = 0.02; const w1 = 0.05;
+                const k2 = 0.025; const w2 = 0.06;
+                const t = Date.now() * 0.001;
+                const wave = Math.sin(p.x * k1 - t*5) + Math.sin(p.x * k2 - t*5 + p.phase);
+                const amplitude = 80;
+                const uncertainty = (Math.random() - 0.5) * 10;
+                p.y = p.baseY + wave * amplitude + uncertainty;
+                if (p.x > width) p.x = 0;
+                const intensity = Math.abs(wave) / 2;
+                p.color = `rgba(0, 255, 136, ${0.1 + intensity * 0.9})`;
+            }
+        },
+        {
+            formula: "A₁v₁ = A₂v₂",
+            desc: "流体力学：连续性方程与层流",
+            trail: 'normal',
+            init: () => initParticles(1400, 'fluid'),
+            update: (p) => {
+                const r = 80; 
+                const dx = p.x - cx;
+                const dy = p.y - cy;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                let vx = 3; let vy = 0;
+                if (dist < r * 2.5) {
+                    const angle = Math.atan2(dy, dx);
+                    const force = (1 - dist / (r * 2.5)) * 6;
+                    vx += Math.cos(angle) * force;
+                    vy += Math.sin(angle) * force;
+                }
+                p.vx += (vx - p.vx) * 0.1;
+                p.vy += (vy - p.vy) * 0.1;
+                p.x += p.vx; p.y += p.vy;
+                if (p.x > width) {
+                    p.x = -10; p.y = Math.random() * height;
+                    p.vx = 3; p.vy = 0;
+                }
+                const v = Math.hypot(p.vx, p.vy);
+                p.color = v > 3.2 ? '#ffffff' : '#00a8ff';
+            }
+        },
+        {
+            formula: "E = mc²",
+            desc: "质能方程：质量向纯能量的转化",
+            trail: 'normal',
+            init: () => initParticles(1000, 'explode'),
+            update: (p) => {
+                p.x += p.vx; p.y += p.vy;
+                p.vx *= 1.02; p.vy *= 1.02;
+                const dx = p.x - cx; const dy = p.y - cy;
+                if (Math.abs(dx) > width/1.2 || Math.abs(dy) > height/1.2) {
+                    p.x = cx; p.y = cy;
+                    const a = Math.random() * 6.28;
+                    const s = Math.random() * 1;
+                    p.vx = Math.cos(a)*s; p.vy = Math.sin(a)*s;
+                }
+                const d = Math.sqrt(dx*dx + dy*dy);
+                if (d < 80) p.color = '#fff';
+                else if (d < 250) p.color = '#ffdd00';
+                else p.color = `hsl(10, 100%, ${Math.max(30, 70 - d/10)}%)`;
+            }
+        },
+        {
+            formula: "F = G (Mm / r²)",
+            desc: "万有引力：天体轨道力学",
+            trail: 'normal',
+            init: () => initParticles(700, 'orbit'),
+            update: (p) => {
+                const dx = cx - p.x; const dy = cy - p.y;
+                const distSq = dx*dx + dy*dy;
+                const dist = Math.sqrt(distSq);
+                if (dist < 30) return; 
+                const force = G_CONST / distSq; 
+                p.vx += force * (dx / dist);
+                p.vy += force * (dy / dist);
+                p.x += p.vx; p.y += p.vy;
+                const speed = Math.hypot(p.vx, p.vy);
+                p.color = speed > 4 ? '#fff' : `hsl(210, 80%, 60%)`;
+            }
+        },
+        {
+            formula: "S = k ln Ω",
+            desc: "热力学第二定律：熵增与无序",
+            trail: 'long',
+            init: () => initParticles(1000, 'entropy'),
+            update: (p) => {
+                p.x += p.vx; p.y += p.vy;
+                if(p.x<0 || p.x>width) p.vx*=-1;
+                if(p.y<0 || p.y>height) p.vy*=-1;
+            }
+        }
+    ];
+
+    class Particle {
+        constructor(x, y, vx, vy, color) {
+            this.x = x;
+            this.y = y;
+            this.vx = vx;
+            this.vy = vy;
+            this.color = color || 'white';
+            this.charge = Math.random() > 0.5 ? 1 : -1;
+            this.baseY = y; 
+            this.phase = Math.random() * Math.PI * 2;
+        }
+
+        draw() {
+            ctx.fillStyle = this.color;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 1.6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+        cx = width / 2;
+        cy = height / 2;
+        modes[currentModeIndex].init();
+    }
+
+    function initParticles(count, type) {
+        particles = [];
+        for (let i = 0; i < count; i++) {
+            let x, y, vx, vy, color;
+            if (type === 'lorentz') {
+                x = Math.random() * width; y = Math.random() * height;
+                const a = Math.random() * 6.28; const s = Math.random() * 2 + 1;
+                vx = Math.cos(a)*s; vy = Math.sin(a)*s;
+            } else if (type === 'quantum') {
+                x = Math.random() * width; y = cy + (Math.random()-0.5)*400;
+                vx = 0; vy = 0;
+            } else if (type === 'fluid') {
+                x = Math.random() * width; y = Math.random() * height;
+                vx = 3; vy = 0;
+            } else if (type === 'explode') {
+                x = cx; y = cy;
+                const a = Math.random()*6.28; const s = Math.random()*0.5;
+                vx = Math.cos(a)*s; vy = Math.sin(a)*s;
+            } else if (type === 'orbit') {
+                const a = Math.random()*6.28; const r = Math.random()*300+50;
+                x = cx+Math.cos(a)*r; y = cy+Math.sin(a)*r;
+                const v = Math.sqrt(G_CONST/r);
+                vx = -Math.sin(a)*v; vy = Math.cos(a)*v;
+            } else if (type === 'entropy') {
+                x = cx + (Math.random()-0.5)*80; y = cy + (Math.random()-0.5)*80;
+                color = x < cx ? '#ff3366' : '#3366ff'; 
+                const a = Math.random()*6.28; const s = Math.random()*3+1;
+                vx = Math.cos(a)*s; vy = Math.sin(a)*s;
+            }
+            particles.push(new Particle(x, y, vx, vy, color));
+        }
+        updateUI();
+    }
+
+    function updateUI() {
+        const mode = modes[currentModeIndex];
+        
+        formulaEl.style.transform = "scale(0.9)";
+        formulaEl.style.opacity = "0.5";
+        
+        setTimeout(() => {
+            formulaEl.innerText = mode.formula;
+            descEl.innerText = mode.desc;
+            formulaEl.style.transform = "scale(1)";
+            formulaEl.style.opacity = "1";
+        }, 100);
+
+        const colors = ['#ff2e63', '#00ff88', '#00a8ff', '#ffdd00', '#ffffff', '#aa66cc'];
+        const color = colors[currentModeIndex];
+        const pct = ((currentModeIndex + 1) / modes.length) * 100;
+        progressEl.style.width = pct + "%";
+        progressEl.style.backgroundColor = color;
+        progressEl.style.boxShadow = `0 0 15px ${color}`;
+    }
+
+    function animate() {
+        const mode = modes[currentModeIndex];
+        let bgAlpha = 0.15; 
+        if (mode.trail === 'long') bgAlpha = 0.04; 
+        if (mode.trail === 'ghost') bgAlpha = 0.1; 
+        
+        ctx.fillStyle = `rgba(0, 0, 0, ${bgAlpha})`;
+        ctx.fillRect(0, 0, width, height);
+
+        if (mode.init.toString().includes('fluid')) {
+             ctx.beginPath();
+             ctx.arc(cx, cy, 76, 0, Math.PI*2);
+             ctx.fillStyle = '#0a0a0a';
+             ctx.fill();
+             ctx.strokeStyle = '#333';
+             ctx.lineWidth = 2;
+             ctx.stroke();
+        }
+
+        particles.forEach(p => {
+            mode.update(p);
+            p.draw();
+        });
+        requestAnimationFrame(animate);
+    }
+
+    function switchMode() {
+        currentModeIndex = (currentModeIndex + 1) % modes.length;
+        modes[currentModeIndex].init();
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, width, height);
+    }
+
+    window.addEventListener('resize', resize);
+    document.body.addEventListener('click', switchMode);
+
+    resize();
+    animate();
+
+</script>
+</body>
+</html>

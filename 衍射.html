@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>波的衍射 - 全向消波版</title>
+    <style>
+        body {
+            margin: 0; background: #f1f5f9; font-family: 'Segoe UI', Roboto, sans-serif;
+            display: flex; flex-direction: column; align-items: center; height: 100vh; overflow: hidden; color: #333;
+        }
+
+        /* 顶部面板 */
+        .controls {
+            background: #fff; padding: 12px 20px; width: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+            display: flex; gap: 24px; justify-content: center; align-items: center; z-index: 10;
+        }
+        
+        .control-group { display: flex; flex-direction: column; align-items: flex-start; }
+        .control-group label { font-size: 0.7rem; color: #64748b; margin-bottom: 4px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;}
+        
+        select, input[type=range] { cursor: pointer; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 4px; }
+        input[type=range] { width: 130px; }
+
+        button {
+            background: #334155; color: white; border: none; padding: 8px 20px; border-radius: 6px; 
+            cursor: pointer; font-weight: 600; box-shadow: 0 2px 5px rgba(0,0,0,0.1); transition: 0.2s;
+        }
+        button:hover { background: #1e293b; transform: translateY(-1px); }
+
+        /* 视口 */
+        .viewport {
+            flex: 1; width: 100%; position: relative; display: flex; justify-content: center; align-items: center;
+            background-image: 
+                linear-gradient(#e2e8f0 1px, transparent 1px), 
+                linear-gradient(90deg, #e2e8f0 1px, transparent 1px);
+            background-size: 40px 40px;
+            background-color: #f8fafc;
+        }
+
+        canvas { position: absolute; }
+        #waveCanvas { image-rendering: pixelated; opacity: 0.96; }
+        #uiCanvas { pointer-events: none; }
+
+        /* HUD */
+        .hud {
+            position: absolute; top: 20px; right: 20px; width: 260px; 
+            background: rgba(255,255,255,0.92); padding: 16px; 
+            border-radius: 12px; border: 1px solid #e2e8f0; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.08); backdrop-filter: blur(8px);
+        }
+        .data-row { display: flex; justify-content: space-between; font-size: 0.9rem; margin-bottom: 8px; color: #475569; }
+        .data-val { font-family: monospace; font-weight: 700; color: #0ea5e9; }
+        
+        .badge {
+            margin-top: 12px; padding: 10px; background: #ecfdf5; border-radius: 6px; 
+            color: #059669; font-size: 0.8rem; line-height: 1.5; border-left: 3px solid #059669;
+        }
+    </style>
+</head>
+<body>
+
+<div class="controls">
+    <div class="control-group">
+        <label>Mode 模式</label>
+        <select id="modeSelect" onchange="resetSystem()">
+            <option value="single">单缝衍射</option>
+            <option value="double">双缝干涉</option>
+        </select>
+    </div>
+    <div class="control-group">
+        <label>Frequency 频率</label>
+        <input type="range" id="freqRange" min="5" max="25" value="12" oninput="updateParams()">
+    </div>
+    <div class="control-group">
+        <label>Slit Width 缝宽</label>
+        <input type="range" id="slitRange" min="4" max="100" value="16" oninput="updateParams()">
+    </div>
+    <!-- 替换为阻尼调节 -->
+    <div class="control-group">
+        <label>Air Damping 介质阻尼</label>
+        <input type="range" id="dampRange" min="950" max="1000" value="999" oninput="updateParams()">
+    </div>
+    <button onclick="resetSystem()">重置系统</button>
+</div>
+
+<div class="viewport">
+    <canvas id="waveCanvas"></canvas>
+    <canvas id="uiCanvas"></canvas>
+    
+    <div class="hud">
+        <div style="font-weight:700; color:#1e293b; margin-bottom:12px; border-bottom:2px solid #e2e8f0; padding-bottom:8px;">实时参数</div>
+        <div class="data-row"><span>缝宽 d:</span> <span id="valD" class="data-val">--</span></div>
+        <div class="data-row"><span>波长 λ:</span> <span id="valLambda" class="data-val">--</span></div>
+        <div class="data-row"><span>比值 λ/d:</span> <span id="valRatio" class="data-val">--</span></div>
+        <div class="data-row"><span>当前阻尼:</span> <span id="valDamp" class="data-val">--</span></div>
+        
+        <div class="badge">
+            <strong>全边界消波：</strong><br>
+            上、下、右（光屏后）均设有梯度消波层，彻底消除所有方向的反射干扰。
+        </div>
+    </div>
+</div>
+
+<script>
+    // ============================================
+    // 1. 系统配置
+    // ============================================
+    const CONFIG = {
+        width: 800,       // 仿真总宽度
+        height: 500,      // 仿真总高度
+        wallX: 120,       // 障碍物 X 坐标
+        screenX: 380,     // 光屏 X 坐标 (拉近，便于观察)
+        boundaryPad: 40,  // 上下边界消波层厚度
+        spongeWidth: 20   // 墙壁前吸音棉厚度
+    };
+
+    // Canvas Context
+    const waveCanvas = document.getElementById('waveCanvas');
+    const uiCanvas = document.getElementById('uiCanvas');
+    const waveCtx = waveCanvas.getContext('2d');
+    const uiCtx = uiCanvas.getContext('2d');
+
+    waveCanvas.width = CONFIG.width; waveCanvas.height = CONFIG.height;
+    uiCanvas.width = CONFIG.width; uiCanvas.height = CONFIG.height;
+
+    // 物理场
+    const size = CONFIG.width * CONFIG.height;
+    let u0 = new Float32Array(size); // t-1
+    let u1 = new Float32Array(size); // t
+    let u2 = new Float32Array(size); // t+1
+    let intensity = new Float32Array(CONFIG.height);
+
+    // 图像数据
+    let imgData = waveCtx.createImageData(CONFIG.width, CONFIG.height);
+    let pixels = new Uint32Array(imgData.data.buffer);
+
+    let time = 0;
+    
+    // 参数对象
+    let params = { 
+        freq: 12, 
+        slit: 16, 
+        userDamping: 0.999, // 由滑块控制
+        mode: 'single',
+        sourceAmp: 300      // 固定波源强度
+    };
+
+    // ============================================
+    // 2. 交互与更新
+    // ============================================
+    function updateParams() {
+        params.freq = parseInt(document.getElementById('freqRange').value);
+        params.slit = parseInt(document.getElementById('slitRange').value);
+        params.mode = document.getElementById('modeSelect').value;
+        
+        // 阻尼映射：滑块 950~1000 -> 0.950 ~ 1.000
+        let sliderVal = parseInt(document.getElementById('dampRange').value);
+        params.userDamping = sliderVal / 1000.0;
+
+        // UI 显示
+        let d = params.slit + (params.mode === 'double' ? 10 : 0);
+        let lambda = (200 / params.freq).toFixed(1);
+        
+        document.getElementById('valD').innerText = d;
+        document.getElementById('valLambda').innerText = lambda;
+        document.getElementById('valRatio').innerText = (lambda/d).toFixed(2);
+        document.getElementById('valDamp').innerText = params.userDamping.toFixed(3);
+    }
+
+    function resetSystem() {
+        u0.fill(0); u1.fill(0); u2.fill(0); intensity.fill(0); time = 0;
+        updateParams();
+    }
+
+    function isGap(y) {
+        const cy = CONFIG.height / 2;
+        if (params.mode === 'single') {
+            return Math.abs(y - cy) < (params.slit / 2);
+        } else {
+            const spacing = params.slit / 2 + 10;
+            const gapHalf = 4;
+            return (Math.abs(y - (cy - spacing)) < gapHalf) || 
+                   (Math.abs(y - (cy + spacing)) < gapHalf);
+        }
+    }
+
+    // ============================================
+    // 3. 物理核心 (全向消波算法)
+    // ============================================
+    function solve() {
+        const w = CONFIG.width;
+        const h = CONFIG.height;
+        const wallX = CONFIG.wallX;
+        const screenX = CONFIG.screenX;
+        const pad = CONFIG.boundaryPad;
+
+        // --- 驱动波源 ---
+        const omega = params.freq * 0.05;
+        const srcVal = Math.sin(time * omega) * params.sourceAmp;
+        for (let y = 10; y < h - 10; y++) {
+            u1[y * w + 10] = srcVal;
+        }
+
+        // --- 场迭代 ---
+        for (let i = w; i < size - w; i++) {
+            let x = i % w;
+            let y = (i / w) | 0;
+
+            // 基础阻尼 (由用户滑块决定，模拟空气/液体粘度)
+            let damping = params.userDamping;
+
+            // =================================================
+            // 核心改进：全向消波 (Gradient Absorption Layers)
+            // =================================================
+
+            // 1. 右侧 (光屏后) 消波
+            if (x >= screenX) {
+                let depth = x - screenX;
+                // 线性衰减：越往右，阻尼越小
+                let factor = 1.0 - (depth * 0.003); 
+                damping *= Math.max(0.5, factor); // 叠加到基础阻尼上
+                
+                // 如果太远，直接归零，防止溢出
+                if(x > w - 10) damping = 0;
+            }
+
+            // 2. 上边界 消波
+            else if (y < pad) {
+                let depth = pad - y; // 离上边的距离 40 -> 0
+                let factor = 1.0 - (depth / pad) * 0.2; // 逐渐减少20%
+                damping *= factor;
+            }
+
+            // 3. 下边界 消波
+            else if (y > h - pad) {
+                let depth = y - (h - pad);
+                let factor = 1.0 - (depth / pad) * 0.2;
+                damping *= factor;
+            }
+
+            // 4. 墙壁左侧吸音 (防止回波)
+            else if (x < wallX && x > wallX - CONFIG.spongeWidth) {
+                if (!isGap(y)) damping = 0.6;
+            }
+
+            // --- 障碍物 ---
+            if (Math.abs(x - wallX) < 2 && !isGap(y)) {
+                u2[i] = 0; continue;
+            }
+
+            // --- 波动方程 ---
+            let val = (u1[i - 1] + u1[i + 1] + u1[i - w] + u1[i + w]) / 2 - u0[i];
+            
+            // 应用计算出的最终阻尼
+            u2[i] = val * damping;
+        }
+
+        // --- 记录光强 ---
+        for (let y = 0; y < h; y++) {
+            let amp = u2[y * w + screenX];
+            let I = amp * amp;
+            if (I > intensity[y]) intensity[y] = I;
+            else intensity[y] *= 0.985;
+        }
+
+        // 交换指针
+        let temp = u0; u0 = u1; u1 = u2; u2 = temp;
+        time++;
+    }
+
+    // ============================================
+    // 4. 渲染引擎
+    // ============================================
+    function draw() {
+        // --- 绘制波 ---
+        pixels.fill(0);
+        const renderLimit = CONFIG.screenX;
+
+        for (let y = 0; y < CONFIG.height; y++) {
+            for (let x = 0; x < renderLimit; x++) {
+                let i = y * CONFIG.width + x;
+                let val = u1[i];
+                
+                // 颜色增强
+                if (val > 0.5) {
+                    let a = Math.min(255, val * 2.0);
+                    pixels[i] = (a << 24) | (255 << 16) | (180 << 8) | 50; // Cyan/Blue
+                } else if (val < -0.5) {
+                    let a = Math.min(255, -val * 2.0);
+                    pixels[i] = (a << 24) | (80 << 16) | (80 << 8) | 255; // Red
+                }
+            }
+        }
+        waveCtx.putImageData(imgData, 0, 0);
+
+        // --- 绘制 UI ---
+        const ctx = uiCtx;
+        const h = CONFIG.height;
+        ctx.clearRect(0, 0, CONFIG.width, h);
+
+        // 墙壁
+        ctx.fillStyle = "#334155";
+        const wx = CONFIG.wallX;
+        const cy = h / 2;
+        if (params.mode === 'single') {
+            let half = params.slit / 2;
+            ctx.fillRect(wx-4, 0, 8, cy-half);
+            ctx.fillRect(wx-4, cy+half, 8, h);
+        } else {
+            let sp = params.slit / 2 + 10;
+            let half = 4;
+            ctx.fillRect(wx-4, 0, 8, cy-sp-half);
+            ctx.fillRect(wx-4, cy-sp+half, 8, (sp*2)-half*2);
+            ctx.fillRect(wx-4, cy+sp+half, 8, h);
+        }
+
+        // 光屏
+        const sx = CONFIG.screenX;
+        ctx.beginPath();
+        ctx.strokeStyle = "#1e293b";
+        ctx.lineWidth = 3;
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx, h);
+        ctx.stroke();
+
+        // 强度曲线
+        ctx.beginPath();
+        ctx.strokeStyle = "#f59e0b";
+        ctx.lineWidth = 3;
+        ctx.shadowColor = "rgba(245, 158, 11, 0.4)";
+        ctx.shadowBlur = 10;
+        
+        let maxI = 1;
+        for(let k=0; k<h; k++) if(intensity[k]>maxI) maxI = intensity[k];
+        if(maxI < 3000) maxI = 3000;
+
+        for (let y = 0; y < h; y+=2) {
+            let len = (intensity[y] / maxI) * 350; 
+            if (y === 0) ctx.moveTo(sx, y);
+            else ctx.lineTo(sx + len, y);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // 文字
+        ctx.fillStyle = "#64748b";
+        ctx.font = "bold 12px sans-serif";
+        ctx.fillText("WALL", wx - 35, 20);
+        ctx.fillStyle = "#0f172a";
+        ctx.fillText("SCREEN", sx + 8, 20);
+        ctx.fillStyle = "#f59e0b";
+        ctx.fillText("INTENSITY", sx + 50, h - 20);
+    }
+
+    function loop() {
+        solve();
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    updateParams();
+    loop();
+
+</script>
+</body>
+</html>

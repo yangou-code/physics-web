@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Physics Visualizer - Ultimate</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000000;
+            font-family: 'Times New Roman', Times, serif;
+            cursor: pointer;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            transition: opacity 0.3s ease;
+        }
+
+        .formula-content {
+            text-align: center;
+            /* 强力阴影，确保文字在粒子上方清晰可见 */
+            text-shadow: 
+                0 0 10px rgba(0,0,0,1),
+                0 0 20px rgba(0,0,0,1),
+                0 0 40px rgba(0,0,0,1),
+                0 0 80px rgba(0,0,0,1); 
+            animation: fadeIn 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+        }
+
+        #formula-text {
+            font-size: min(15vw, 5rem); /* 响应式字体大小 */
+            font-weight: bold;
+            margin: 0;
+            letter-spacing: 2px;
+            color: #ffffff;
+            font-style: italic;
+        }
+
+        #formula-desc {
+            font-size: min(5vw, 1.2rem);
+            margin-top: 20px;
+            color: #dddddd;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            font-weight: 300;
+            text-shadow: 0 0 5px rgba(0,0,0,1);
+        }
+
+        #instruction {
+            position: absolute;
+            bottom: 40px;
+            font-size: 0.8rem;
+            color: rgba(255, 255, 255, 0.4);
+            font-family: sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px) scale(0.95); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 0.4; }
+            50% { opacity: 0.7; }
+        }
+
+        sup { vertical-align: super; font-size: smaller; }
+        sub { vertical-align: sub; font-size: smaller; }
+    </style>
+</head>
+<body>
+
+    <canvas id="canvas"></canvas>
+
+    <div id="ui-layer">
+        <div class="formula-content">
+            <h1 id="formula-text"></h1>
+            <p id="formula-desc"></p>
+        </div>
+        <div id="instruction">Click Screen to Switch</div>
+    </div>
+
+<script>
+    // 公式数据配置
+    const formulas = [
+        {
+            tex: "E = mc<sup>2</sup>",
+            desc: "Energy-Mass Equivalence",
+            mode: "energy" 
+        },
+        {
+            tex: "F = ma",
+            desc: "Newton's Second Law",
+            mode: "force"
+        },
+        {
+            tex: "F = G <span style='font-size:0.6em'>m<sub>1</sub>m<sub>2</sub>/r<sup>2</sup></span>",
+            desc: "Universal Gravitation",
+            mode: "gravity"
+        },
+        {
+            tex: "i&#8463; &part;&psi;/&part;t = &#292;&psi;",
+            desc: "Schrödinger Equation",
+            mode: "quantum"
+        },
+        {
+            tex: "S = k<sub>B</sub> ln &Omega;",
+            desc: "Entropy (Thermodynamics)",
+            mode: "entropy"
+        },
+        {
+            tex: "&nabla; &sdot; E = &rho;/&epsilon;<sub>0</sub>",
+            desc: "Gauss's Law (Electromagnetism)",
+            mode: "field"
+        },
+        {
+            tex: "&Delta;x&Delta;p &ge; &#8463;/2",
+            desc: "Uncertainty Principle",
+            mode: "uncertainty"
+        },
+        {
+            tex: "v = H<sub>0</sub>d",
+            desc: "Hubble's Law (Expansion)",
+            mode: "expansion"
+        },
+        {
+            tex: "&lambda; = h/p",
+            desc: "Wave-Particle Duality",
+            mode: "duality"
+        },
+        {
+            tex: "R<sub>&mu;&nu;</sub> - 1/2Rg<sub>&mu;&nu;</sub> = 8&pi;GT<sub>&mu;&nu;</sub>",
+            desc: "General Relativity",
+            mode: "spacetime"
+        }
+    ];
+
+    let currentIndex = 0;
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const fText = document.getElementById('formula-text');
+    const fDesc = document.getElementById('formula-desc');
+    
+    let width, height, centerX, centerY;
+    let particles = [];
+    const particleCount = 800; // 粒子总数
+
+    // 状态锁：用于切换时的转场控制
+    let isSwitching = false;
+
+    // 事件监听
+    document.addEventListener('mousedown', nextFormula);
+    document.addEventListener('touchstart', (e) => { e.preventDefault(); nextFormula(); }, {passive: false});
+
+    class Particle {
+        constructor() {
+            this.reset();
+        }
+
+        // 重置粒子状态
+        reset() {
+            this.x = Math.random() * width;
+            this.y = Math.random() * height;
+            
+            // 必须强制归零速度，防止上一模式的高速残留
+            this.vx = 0;
+            this.vy = 0;
+            
+            this.size = Math.random() * 2 + 0.5;
+            this.life = Math.random() * 100;
+            this.alpha = 1;
+            
+            // 模式专用参数
+            this.baseX = this.x; 
+            this.baseY = this.y;
+            this.angle = Math.random() * Math.PI * 2;
+            this.radius = Math.random() * Math.min(width, height) / 2 + 20; 
+            this.speed = Math.random() * 0.02 + 0.005;
+            this.gridX = null; // 相对论网格标记
+        }
+
+        update(mode) {
+            const dx = this.x - centerX;
+            const dy = this.y - centerY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+
+            switch(mode) {
+                // 1. E=mc^2: 极速爆发
+                case 'energy':
+                    this.angle = Math.atan2(dy, dx);
+                    // 速度极快，且离中心越近越快
+                    let explosionSpeed = 3000 / (dist + 5); 
+                    this.vx = Math.cos(this.angle) * explosionSpeed * 0.9 + (Math.random()-0.5) * 2;
+                    this.vy = Math.sin(this.angle) * explosionSpeed * 0.9 + (Math.random()-0.5) * 2;
+                    
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    
+                    // 颜色：中心亮白，外围红橙
+                    const hue = dist < 50 ? 60 : (dist < 200 ? 30 : 0);
+                    const light = Math.max(30, 100 - dist/3);
+                    this.color = `hsl(${hue}, 100%, ${light}%)`;
+                    
+                    // 循环重生
+                    if (dist > Math.max(width, height)/1.2 || dist < 2) {
+                        this.x = centerX + (Math.random()-0.5) * 15;
+                        this.y = centerY + (Math.random()-0.5) * 15;
+                        this.vx = 0; // 重生时速度归零
+                        this.vy = 0;
+                    }
+                    break;
+
+                // 2. F=ma: 加速直线
+                case 'force':
+                    // 如果速度异常大（来自上一个模式），强制归零
+                    if (Math.abs(this.vx) > 50) this.vx = 0;
+                    
+                    this.vx += 0.25; // 恒定加速度
+                    this.x += this.vx;
+                    this.y += (Math.random() - 0.5) * 0.5; // 微弱震动
+                    
+                    let speedRatio = Math.min(this.vx / 25, 1);
+                    this.color = `rgba(0, 255, 255, ${0.4 + speedRatio * 0.6})`;
+                    
+                    if (this.x > width) {
+                        this.x = 0;
+                        this.vx = Math.random() * 2;
+                        this.y = Math.random() * height;
+                    }
+                    break;
+
+                // 3. Gravity: 3D 轨道
+                case 'gravity':
+                    this.angle += this.speed;
+                    let r = this.radius;
+                    this.x = centerX + Math.cos(this.angle) * r;
+                    this.y = centerY + Math.sin(this.angle) * (r * 0.6); // 压扁模拟透视
+                    
+                    let zIndex = Math.sin(this.angle);
+                    this.size = 1.5 + zIndex; // 近大远小
+                    this.color = `hsl(220, 80%, ${50 + zIndex * 20}%)`;
+                    break;
+
+                // 4. Quantum: 波函数
+                case 'quantum':
+                    this.x += 1.5;
+                    // 叠加正弦波
+                    this.y = this.baseY + Math.sin(this.x * 0.015 + this.life) * 40;
+                    this.color = `hsla(140, 100%, 60%, 0.7)`;
+                    
+                    if (this.x > width) {
+                        this.x = 0;
+                        this.baseY = Math.random() * height;
+                    }
+                    this.life += 0.05;
+                    break;
+
+                // 5. Entropy: 混乱布朗运动
+                case 'entropy':
+                    this.x += (Math.random() - 0.5) * 12;
+                    this.y += (Math.random() - 0.5) * 12;
+                    
+                    // 边界循环
+                    if (this.x < 0) this.x = width; 
+                    if (this.x > width) this.x = 0;
+                    if (this.y < 0) this.y = height;
+                    if (this.y > height) this.y = 0;
+                    
+                    this.color = '#cccccc';
+                    break;
+
+                // 6. Field: 辐射场
+                case 'field':
+                    let angF = Math.atan2(dy, dx);
+                    let rSpd = 4;
+                    let tSpd = 150 / (dist + 1);
+                    // 螺旋向外
+                    this.vx = Math.cos(angF) * rSpd - Math.sin(angF) * tSpd * 0.02;
+                    this.vy = Math.sin(angF) * rSpd + Math.cos(angF) * tSpd * 0.02;
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    
+                    this.color = `hsl(${dist/4}, 70%, 60%)`;
+                    if (dist > Math.max(width, height)/1.5) {
+                        this.x = centerX + (Math.random()-0.5) * 5;
+                        this.y = centerY + (Math.random()-0.5) * 5;
+                    }
+                    break;
+
+                // 7. Uncertainty: 位置闪烁
+                case 'uncertainty':
+                    this.x = this.baseX + (Math.random() - 0.5) * 80;
+                    this.y = this.baseY + (Math.random() - 0.5) * 80;
+                    this.color = `rgba(255, 0, 180, ${Math.random() * 0.8})`;
+                    // 量子跃迁
+                    if (Math.random() < 0.03) {
+                        this.baseX = Math.random() * width;
+                        this.baseY = Math.random() * height;
+                    }
+                    break;
+
+                // 8. Hubble: 宇宙膨胀
+                case 'expansion':
+                    this.vx = dx * 0.04;
+                    this.vy = dy * 0.04;
+                    this.x += this.vx;
+                    this.y += this.vy;
+                    this.color = '#ffaaee';
+                    if (Math.abs(dx) > width/2 || Math.abs(dy) > height/2) {
+                        this.x = centerX + (Math.random()-0.5) * 40;
+                        this.y = centerY + (Math.random()-0.5) * 40;
+                    }
+                    break;
+
+                // 9. Duality: 波粒二象性
+                case 'duality':
+                    this.life += 0.1;
+                    let ph = Math.sin(this.life * 0.3);
+                    if (ph > 0) {
+                        // 波态
+                        this.x += 3;
+                        this.y = this.baseY + Math.sin(this.x * 0.08) * 20;
+                        this.color = '#00ffcc';
+                        this.size = 2;
+                    } else {
+                        // 粒子态
+                        this.x += 5;
+                        this.y = this.baseY;
+                        this.color = '#ffffff';
+                        this.size = 1;
+                    }
+                    if (this.x > width) this.x = 0;
+                    break;
+
+                // 10. Spacetime: 广义相对论网格
+                case 'spacetime':
+                    if (!this.gridX) {
+                        this.gridX = Math.random() * width;
+                        this.gridY = Math.random() * height;
+                    }
+                    const gdx = this.gridX - centerX;
+                    const gdy = this.gridY - centerY;
+                    const gDist = Math.sqrt(gdx*gdx + gdy*gdy);
+                    
+                    // 空间扭曲公式
+                    const warp = 9000 / (gDist + 150); 
+                    const atc = Math.atan2(gdy, gdx);
+                    
+                    this.x = this.gridX - Math.cos(atc) * warp;
+                    this.y = this.gridY - Math.sin(atc) * warp;
+                    
+                    this.color = 'rgba(255, 255, 255, 0.4)';
+                    this.gridX += (Math.random()-0.5) * 0.2; // 保持网格微微活跃
+                    break;
+            }
+        }
+
+        draw() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fillStyle = this.color || 'white';
+            ctx.fill();
+        }
+    }
+
+    function init() {
+        resize();
+        window.addEventListener('resize', resize);
+        
+        for (let i = 0; i < particleCount; i++) {
+            particles.push(new Particle());
+        }
+
+        updateUI();
+        animate();
+    }
+
+    function resize() {
+        width = canvas.width = window.innerWidth;
+        height = canvas.height = window.innerHeight;
+        centerX = width / 2;
+        centerY = height / 2;
+        particles.forEach(p => p.reset());
+    }
+
+    // 核心切换逻辑
+    function nextFormula() {
+        if (isSwitching) return; // 防止重复点击
+        isSwitching = true;
+
+        const ui = document.querySelector('.formula-content');
+        ui.style.opacity = 0;
+        
+        // 1. 立即清屏，切断上一帧画面
+        ctx.fillStyle = '#000000';
+        ctx.globalCompositeOperation = 'source-over'; // 关闭高光
+        ctx.fillRect(0, 0, width, height);
+
+        // 延迟一小段时间进行逻辑切换
+        setTimeout(() => {
+            currentIndex = (currentIndex + 1) % formulas.length;
+            
+            // 2. 再次清屏，确保万无一失
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, width, height);
+            
+            // 3. 重置粒子（特别是清除速度）
+            particles.forEach(p => p.reset());
+
+            updateUI();
+            ui.style.opacity = 1;
+            
+            // 稍微等待一会再开始渲染新的一帧，给人一种“刷新”的感觉
+            setTimeout(() => { 
+                isSwitching = false; 
+            }, 50);
+        }, 250);
+    }
+
+    function updateUI() {
+        const data = formulas[currentIndex];
+        fText.innerHTML = data.tex;
+        fDesc.innerText = data.desc;
+    }
+
+    function animate() {
+        // 如果正在切换，渲染纯黑并跳过计算
+        if (isSwitching) {
+            ctx.fillStyle = '#000000';
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.fillRect(0, 0, width, height);
+            requestAnimationFrame(animate);
+            return;
+        }
+
+        const currentMode = formulas[currentIndex].mode;
+        
+        // 拖尾长度控制
+        if (currentMode === 'spacetime' || currentMode === 'uncertainty') {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.25)'; // 清晰度高
+        } else if (currentMode === 'energy') {
+             ctx.fillStyle = 'rgba(0, 0, 0, 0.1)'; // 光效强
+        } else {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.15)'; // 默认
+        }
+        
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillRect(0, 0, width, height);
+
+        // 仅在能量爆发模式启用高光叠加
+        if (currentMode === 'energy') {
+            ctx.globalCompositeOperation = 'lighter';
+        } else {
+            ctx.globalCompositeOperation = 'source-over';
+        }
+
+        particles.forEach(p => {
+            p.update(currentMode);
+            p.draw();
+        });
+
+        requestAnimationFrame(animate);
+    }
+
+    // 启动
+    init();
+
+</script>
+</body>
+</html>

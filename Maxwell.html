@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maxwell Equations - Vortex Boost</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            cursor: pointer;
+        }
+
+        #canvas {
+            display: block;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            pointer-events: none;
+            mix-blend-mode: screen;
+            width: 100%;
+            z-index: 10;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin: 0;
+            color: #fff;
+            text-shadow: 0 0 15px rgba(255,255,255,0.5);
+            letter-spacing: 2px;
+        }
+
+        .formula {
+            font-family: 'Times New Roman', serif;
+            font-size: 3rem;
+            font-style: italic;
+            margin: 15px 0;
+            font-weight: bold;
+        }
+
+        .desc {
+            font-size: 1rem;
+            color: #ddd;
+            background: rgba(20, 20, 20, 0.8);
+            padding: 8px 20px;
+            border-radius: 30px;
+            display: inline-block;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255,255,255,0.15);
+        }
+
+        #hint {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            color: #666;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h1 id="title">Loading...</h1>
+        <div id="formula" class="formula"></div>
+        <div id="desc" class="desc"></div>
+    </div>
+    <div id="hint">Click Screen to Switch Equation</div>
+
+    <canvas id="canvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    const ui = {
+        title: document.getElementById('title'),
+        formula: document.getElementById('formula'),
+        desc: document.getElementById('desc'),
+        container: document.getElementById('ui-layer')
+    };
+
+    let w, h, cx, cy;
+    let particles = [];
+    let sceneIdx = 0;
+    let time = 0;
+
+    const SCENES = [
+        {
+            name: "Gauss's Law",
+            eq: "∇ · E = ρ / ε₀",
+            text: "电场源于电荷 (辐射状发散)",
+            color: "#00eaff", 
+            count: 600
+        },
+        {
+            name: "Gauss's Magnetism",
+            eq: "∇ · B = 0",
+            text: "无磁单极子 (磁场线闭合)",
+            color: "#ff00dd", 
+            count: 1200
+        },
+        {
+            name: "Faraday's Law",
+            eq: "∇ × E = -∂B / ∂t",
+            text: "变化的磁场产生强旋涡电场", // 更新描述
+            color: "#ffaa00", 
+            count: 1000 // 增加粒子数增强气势
+        },
+        {
+            name: "Ampère-Maxwell Law",
+            eq: "∇ × B = μ₀(J + ε₀∂E/∂t)",
+            text: "传导电流和位移电流产生磁场",
+            color: "#00ff88", 
+            count: 900
+        }
+    ];
+
+    function resize() {
+        w = canvas.width = window.innerWidth;
+        h = canvas.height = window.innerHeight;
+        cx = w / 2;
+        cy = h / 2;
+        initParticles();
+    }
+
+    class Particle {
+        constructor() {
+            this.reset(true);
+        }
+
+        reset(initial = false) {
+            this.scene = sceneIdx;
+            this.x = Math.random() * w;
+            this.y = Math.random() * h;
+            this.life = Math.random();
+            this.size = Math.random() * 1.5 + 0.5;
+            this.baseColor = SCENES[sceneIdx].color;
+            
+            // --- 场景 1: 高斯磁场 (保持修复后的逻辑) ---
+            if (this.scene === 1) {
+                do {
+                    this.x = Math.random() * w;
+                    this.y = Math.random() * h;
+                } while(Math.abs(this.y - cy) < 20 && Math.abs(this.x - cx) < 150);
+            }
+            
+            // --- 场景 2: 法拉第 (涡旋优化) ---
+            if (this.scene === 2) {
+                // 初始化时，让粒子分布在以中心为圆心的不同半径上
+                const angle = Math.random() * Math.PI * 2;
+                // 偏重于外部，这样有“吸入”的过程
+                const r = Math.random() * (Math.min(w,h)/1.5) + 50; 
+                this.x = cx + Math.cos(angle) * r;
+                this.y = cy + Math.sin(angle) * r;
+                this.size = Math.random() * 2; // 稍微大一点
+            }
+
+            if (this.scene === 0) {
+                const angle = Math.random() * Math.PI * 2;
+                const r = Math.random() * 20;
+                this.x = cx + Math.cos(angle) * r;
+                this.y = cy + Math.sin(angle) * r;
+            }
+            if (this.scene === 3) {
+                this.type = Math.random() > 0.8 ? 'electron' : 'field';
+                if (this.type === 'electron') {
+                    this.x = cx + (Math.random() - 0.5) * 15; 
+                    this.y = Math.random() * h;
+                    this.vy = 15 + Math.random() * 10;
+                } else {
+                    this.angle = Math.random() * Math.PI * 2;
+                    this.radius = Math.random() * (Math.min(w,h)/2.2 - 30) + 30;
+                }
+            }
+        }
+
+        update() {
+            this.life -= 0.005;
+            const dx = this.x - cx;
+            const dy = this.y - cy;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+
+            // =====================================
+            // 场景 0: 高斯电场
+            // =====================================
+            if (sceneIdx === 0) {
+                const speed = 250 / (dist + 5); 
+                const angle = Math.atan2(dy, dx);
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                if (dist > Math.max(w,h)/1.5 || this.life < 0) this.reset();
+            }
+
+            // =====================================
+            // 场景 1: 高斯磁定律
+            // =====================================
+            else if (sceneIdx === 1) {
+                const magnetLen = 100; 
+                const magnetThickness = 12; 
+                const inTunnel = (Math.abs(dx) < magnetLen) && (Math.abs(dy) < magnetThickness);
+
+                if (inTunnel) {
+                    this.vx = -12; 
+                    this.vy = this.vy * 0.5; 
+                    if (Math.abs(dy) > magnetThickness - 2) this.vy = -dy * 0.1; 
+                } else {
+                    const northX = cx - magnetLen;
+                    const southX = cx + magnetLen;
+                    const rN = Math.hypot(this.x - northX, this.y - cy) + 5; 
+                    const rS = Math.hypot(this.x - southX, this.y - cy) + 5;
+
+                    let fx = ((this.x - northX) / Math.pow(rN, 3)) - ((this.x - southX) / Math.pow(rS, 3));
+                    let fy = ((this.y - cy) / Math.pow(rN, 3)) - ((this.y - cy) / Math.pow(rS, 3));
+
+                    const mag = Math.hypot(fx, fy);
+                    const speed = 4; 
+                    if (mag > 0) {
+                        this.vx = (fx / mag) * speed;
+                        this.vy = (fy / mag) * speed;
+                    }
+                    if (rS < 40) {
+                        this.vx = this.vx * 0.8 - 2; 
+                        this.vy = this.vy * 0.8 + (cy - this.y) * 0.05; 
+                    }
+                }
+                if (Math.abs(dx) > w/1.5 || Math.abs(dy) > h/1.5) this.reset();
+            }
+
+            // =====================================
+            // 场景 2: 法拉第定律 (加强版涡旋)
+            // =====================================
+            else if (sceneIdx === 2) {
+                // dB/dt 变化率，控制旋转方向和强度
+                const flux = Math.sin(time * 2); 
+                
+                // 1. 计算切向速度 (Curl)
+                // 距离中心越近，旋转越疯狂 (类似 1/r^0.8)
+                const rotSpeed = (flux * 800) / (Math.pow(dist, 0.8) + 10);
+                
+                // 2. 计算径向吸力 (Suction)
+                // 无论旋转方向如何，都有一个恒定的向心力，模拟“吸入”效果
+                // 这样粒子会走螺旋线而不是圆
+                const suction = 3; 
+
+                const angle = Math.atan2(dy, dx);
+                
+                // 叠加速度向量：切向旋转 + 径向向心
+                this.vx = -Math.sin(angle) * rotSpeed - Math.cos(angle) * suction;
+                this.vy =  Math.cos(angle) * rotSpeed - Math.sin(angle) * suction;
+                
+                // 记录当前速度大小，用于绘制时的高亮
+                this.currentSpeed = Math.abs(rotSpeed);
+
+                // 边界重置：
+                // 1. 如果被吸入黑洞 (dist < 15)，重置到边缘
+                // 2. 如果因为某些原因飞太远，重置
+                if (dist < 15 || dist > Math.max(w,h)) {
+                    // 重置到外部随机位置
+                    const randAngle = Math.random() * Math.PI * 2;
+                    const randR = Math.min(w,h)/1.5 + Math.random()*100;
+                    this.x = cx + Math.cos(randAngle) * randR;
+                    this.y = cy + Math.sin(randAngle) * randR;
+                    // 给一点点初始向心推力
+                    this.vx = (cx - this.x) * 0.01;
+                    this.vy = (cy - this.y) * 0.01;
+                }
+            }
+
+            // =====================================
+            // 场景 3: 安培-麦克斯韦定律
+            // =====================================
+            else if (sceneIdx === 3) {
+                if (this.type === 'electron') {
+                    this.vx = 0;
+                    this.x += (cx - this.x) * 0.1; 
+                    if (this.y > h + 50) {
+                        this.y = -50;
+                        this.x = cx + (Math.random() - 0.5) * 15;
+                        this.vy = 15 + Math.random() * 10;
+                    }
+                } else {
+                    this.angle += 0.025;
+                    this.x = cx + Math.cos(this.angle) * this.radius;
+                    this.y = cy + Math.sin(this.angle) * this.radius * 0.35;
+                    const z = Math.sin(this.angle);
+                    this.size = 1.5 + z * 0.8;
+                    this.alpha = 0.4 + z * 0.4;
+                }
+                if (this.type !== 'electron') return; 
+            }
+
+            this.x += this.vx;
+            this.y += this.vy;
+        }
+
+        draw() {
+            // 安培定律流光
+            if (sceneIdx === 3 && this.type === 'electron') {
+                ctx.beginPath();
+                const tailLen = 30;
+                const grad = ctx.createLinearGradient(this.x, this.y, this.x, this.y - tailLen);
+                grad.addColorStop(0, "rgba(255, 255, 255, 1)");
+                grad.addColorStop(1, "rgba(255, 255, 255, 0)");
+                ctx.strokeStyle = grad;
+                ctx.lineWidth = 2;
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(this.x, this.y - tailLen);
+                ctx.stroke();
+                return;
+            }
+
+            ctx.beginPath();
+            let color = this.baseColor;
+            let alpha = Math.min(1, this.life + 0.2);
+            
+            if (sceneIdx === 3 && this.type === 'field') alpha = this.alpha;
+            
+            // --- 场景 1: 高斯磁场淡化内部 ---
+            if (sceneIdx === 1) {
+                 const magnetLen = 100;
+                 const magnetThickness = 12;
+                 if (Math.abs(this.x - cx) < magnetLen && Math.abs(this.y - cy) < magnetThickness + 5) {
+                     alpha = 0.15; 
+                     this.size = 1; 
+                 }
+            }
+
+            // --- 场景 2: 法拉第涡旋 动态颜色增强 ---
+            if (sceneIdx === 2) {
+                // 根据速度计算亮度
+                // 速度越快(靠近中心)，颜色越趋向于白色/高亮金
+                const speedRatio = Math.min(1, this.currentSpeed / 15); // 归一化
+                
+                // 基础色是橙色 #ffaa00
+                // 我们混合一点白色进去
+                if (speedRatio > 0.5) {
+                    ctx.fillStyle = "#fff"; // 极速核心变白
+                    alpha = 0.9;
+                } else {
+                    ctx.fillStyle = this.baseColor;
+                    alpha = 0.6 + speedRatio * 0.4;
+                }
+                
+                // 靠近中心的粒子拉长一点点，产生运动模糊感
+                this.size = 1 + speedRatio * 2;
+            } else {
+                ctx.fillStyle = color;
+            }
+            
+            ctx.globalAlpha = alpha;
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+        }
+    }
+
+    function initParticles() {
+        particles = [];
+        const count = SCENES[sceneIdx].count;
+        for(let i=0; i<count; i++) {
+            particles.push(new Particle());
+        }
+        
+        ui.container.style.color = SCENES[sceneIdx].color;
+        ui.title.innerText = SCENES[sceneIdx].name;
+        ui.formula.innerText = SCENES[sceneIdx].eq;
+        ui.desc.innerText = SCENES[sceneIdx].text;
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        time += 0.01;
+
+        // 拖尾清除 (更深的拖尾让涡旋更平滑)
+        ctx.fillStyle = 'rgba(5, 5, 5, 0.2)';
+        ctx.fillRect(0, 0, w, h);
+
+        particles.forEach(p => {
+            p.update();
+            p.draw();
+        });
+    }
+
+    function nextScene() {
+        sceneIdx = (sceneIdx + 1) % SCENES.length;
+        initParticles();
+    }
+
+    window.addEventListener('resize', resize);
+    window.addEventListener('mousedown', nextScene);
+    window.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        nextScene();
+    }, {passive: false});
+
+    resize();
+    animate();
+
+</script>
+</body>
+</html>
